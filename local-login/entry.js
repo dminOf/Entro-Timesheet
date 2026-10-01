@@ -2,6 +2,10 @@ const $=id=>document.getElementById(id);
 const draftByDate=new Map();
 const durations=Array.from({length:16},(_,i)=>String((i+1)/2));
 let options=null,sheet=null,visibleDates=[],renderedHolidayDates=new Set(),batch=false,loading=false;
+let submitting=false,reviewedEntries=[],reviewMode='create',pendingSubmission=null,lastSubmission=null,sessionAvailable=false;
+const outcomes=new Map();
+const locked=date=>['created','alreadyRecorded','unknown'].includes(outcomes.get(date)?.status);
+const canEditDate=date=>!holidayOn(date)&&!locked(date);
 const checked=value=>value===true||value===1||value==='1'||value==='true';
 const displayDate=date=>date.split('-').reverse().join('/');
 const weekDay=date=>new Intl.DateTimeFormat('en',{weekday:'short',timeZone:'UTC'}).format(new Date(date+'T00:00:00Z'));
@@ -9,9 +13,10 @@ const views=[['checkins','Check-in history','M8 4H5a2 2 0 0 0-2 2v14h18V6a2 2 0 
 for(const [key,label,path]of views){const button=document.createElement('button');button.innerHTML='<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="'+path+'"/></svg>';const span=document.createElement('span');span.textContent=label;button.append(span);button.onclick=()=>location.href='./?view='+key;$('navigation').append(button);}
 async function request(path='',method='GET',input){
   const response=await fetch('api'+path,{method,headers:method==='POST'?{'X-Entro-Local':'1','Content-Type':'application/json'}:{},...(input===undefined?{}:{body:JSON.stringify(input)})});
-  const result=await response.json();if(!response.ok)throw Error(result.error||'Unable to load the local workspace.');return result;
+  const result=await response.json();if(!response.ok){const error=Error(result.error||'Unable to load the local workspace.');error.status=response.status;throw error;}return result;
 }
 function setSession(s){
+  sessionAvailable=s.hasSession;syncSubmitButton();
   $('name').textContent=s.account?.name||s.account?.username||'Saved account';$('role').textContent=s.account?.roles?.join(', ')||'';
   $('username').textContent=s.account?.username||'—';$('expiry').textContent=s.expiresAt?new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Bangkok',dateStyle:'medium',timeStyle:'short'}).format(new Date(s.expiresAt))+' (Bangkok)':'—';
   $('dot').className='dot '+(s.hasSession?'good':'bad');$('sessionLabel').textContent=s.hasSession?(s.phase==='saved'?'Verified':'Saved session'):'Login needed';$('verify').disabled=!s.hasSession;
@@ -36,14 +41,15 @@ function problem(entry){
   if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(entry.startTime)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(entry.endTime))return 'Use HH:MM times';
   if(entry.endTime<=entry.startTime)return 'Check time range';
   if(!durations.includes(entry.duration))return 'Choose 0.5–8 hours';
+  if(entry.remark.length>2000)return 'Description too long';
   return '';
 }
 function snapshot(){
   if(!sheet)return [];
-  const rows=sheet.getData();rows.forEach((row,i)=>{if(!renderedHolidayDates.has(visibleDates[i])&&!holidayOn(visibleDates[i]))draftByDate.set(visibleDates[i],[...row]);});return rows;
+  const rows=sheet.getData();rows.forEach((row,i)=>{if(!renderedHolidayDates.has(visibleDates[i])&&canEditDate(visibleDates[i]))draftByDate.set(visibleDates[i],[...row]);});return rows;
 }
 const holidayOn=date=>options?.holidays?.find(h=>h.date===date);
-const editableCount=()=>visibleDates.filter(date=>!holidayOn(date)).length;
+const editableCount=()=>visibleDates.filter(canEditDate).length;
 function update(){
   if(batch||!sheet)return;
   const rows=snapshot();let selected=0,ready=0,selectedReady=0;
@@ -54,9 +60,15 @@ function update(){
       const checkbox=sheet.getCellFromCoords(0,y)?.querySelector('input');if(checkbox){checkbox.disabled=true;checkbox.checked=false;checkbox.setAttribute('aria-label','Public holiday: '+displayDate(visibleDates[y]));}
       sheet.getCellFromCoords(9,y).textContent='Public holiday';return;
     }
+    const outcome=outcomes.get(visibleDates[y]);
+    if(locked(visibleDates[y])){
+      for(let x=0;x<10;x++){const cell=sheet.getCellFromCoords(x,y);sheet.setReadOnly(cell,true);cell.closest('tr').classList.add('submitted-row');cell.title=outcome.message;}
+      const checkbox=sheet.getCellFromCoords(0,y)?.querySelector('input');if(checkbox){checkbox.disabled=true;checkbox.checked=false;}
+      sheet.getCellFromCoords(9,y).textContent=outcome.status==='unknown'?'Check history':'Recorded';return;
+    }
     const error=problem(entryFromRow(row,visibleDates[y]));const isSelected=checked(row[0]);
     if(isSelected)selected++;if(!error){ready++;if(isSelected)selectedReady++;}
-    const cell=sheet.getCellFromCoords(9,y);if(cell){cell.textContent=error||'Ready';cell.classList.toggle('draft-invalid',!!error);cell.classList.toggle('draft-ready',!error);}
+    const cell=sheet.getCellFromCoords(9,y);if(cell){cell.textContent=error||(outcome?.status==='failed'?'Rejected':outcome?.status==='notSubmitted'?'Not submitted':'Ready');cell.title=outcome?.message||'';cell.classList.toggle('draft-invalid',!!error||outcome?.status==='failed');cell.classList.toggle('draft-ready',!error&&outcome?.status!=='failed');}
     const checkbox=sheet.getCellFromCoords(0,y)?.querySelector('input');if(checkbox)checkbox.setAttribute('aria-label','Select '+displayDate(visibleDates[y]));
   });
   const editable=editableCount();$('selectAllDates').disabled=!editable;$('selectAllDates').checked=!!editable&&selected===editable;$('selectAllDates').indeterminate=selected>0&&selected<editable;
@@ -68,7 +80,7 @@ function renderMonth(){
   if(sheet){jspreadsheet.destroy($('entrySpreadsheet'));sheet=null;}
   renderedHolidayDates=new Set(visibleDates.filter(date=>holidayOn(date)));
   $('entrySpreadsheet').replaceChildren();$('entrySpreadsheet').hidden=!visibleDates.length;$('entryEmpty').hidden=!!visibleDates.length;
-  const editable=editableCount(),holidays=visibleDates.length-editable;
+  const editable=editableCount(),holidays=visibleDates.filter(date=>holidayOn(date)).length;
   $('missingSummary').textContent=editable+' missing '+(editable===1?'weekday':'weekdays')+(holidays?' · '+holidays+' public '+(holidays===1?'holiday':'holidays'):'');$('bulkMessage').textContent='';$('fillAll').disabled=!editable;
   $('undoEntry').disabled=!visibleDates.length;$('redoEntry').disabled=!visibleDates.length;
   if(!visibleDates.length){$('selectAllDates').checked=false;$('selectAllDates').indeterminate=false;$('selectAllDates').disabled=true;$('selectionCount').textContent='0 selected';$('readySummary').textContent='No entries to fill';$('reviewSelected').disabled=true;$('fillSelected').disabled=true;return;}
@@ -87,9 +99,10 @@ function renderMonth(){
   ];
   batch=true;
   sheet=jspreadsheet($('entrySpreadsheet'),{tabs:false,toolbar:false,parseFormulas:false,parseHTML:false,contextMenu:()=>null,
-    onbeforechange:(instance,cell,x,y)=>holidayOn(visibleDates[Number(y)])?instance.getValueFromCoords(Number(x),Number(y)):undefined,
+    onbeforechange:(instance,cell,x,y)=>!canEditDate(visibleDates[Number(y)])?instance.getValueFromCoords(Number(x),Number(y)):undefined,
     onafterchanges:()=>update(),
     onchange:(instance,cell,x,y)=>{
+      if(!batch&&Number(x)>2&&canEditDate(visibleDates[Number(y)]))outcomes.delete(visibleDates[Number(y)]);
       if(batch||Number(x)!==5)return;
       const project=instance.getValueFromCoords(5,Number(y));const compatible=options.functions.filter(f=>f.projectId===project);
       const current=instance.getValueFromCoords(6,Number(y));if(!compatible.some(f=>f.id===current)){batch=true;instance.setValueFromCoords(6,Number(y),compatible.length===1?compatible[0].id:'');batch=false;}
@@ -104,7 +117,10 @@ async function loadOptions(){
   if(loading)return;loading=true;$('reloadEntries').disabled=true;$('entryAlert').hidden=true;
   const current=$('entryMonth').value;
   try{
-    snapshot();options=await request('/entry-options');options.holidays.forEach(h=>draftByDate.delete(h.date));populate($('bulkProject'),options.projects,'Choose project');populateFunctions();
+    snapshot();options=await request('/entry-options');
+    const recorded=date=>['created','alreadyRecorded'].includes(outcomes.get(date)?.status);
+    options.dates=options.dates.filter(date=>!recorded(date));options.calendarDates=options.calendarDates.filter(date=>holidayOn(date)||!recorded(date));
+    options.holidays.forEach(h=>draftByDate.delete(h.date));populate($('bulkProject'),options.projects,'Choose project');populateFunctions();
     const months=[...new Set([...options.calendarDates.map(d=>d.slice(0,7)),options.today.slice(0,7)])].sort().reverse();
     populate($('entryMonth'),months.map(id=>({id,name:new Intl.DateTimeFormat('en',{month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(id+'-01T00:00:00Z'))+' · '+options.dates.filter(d=>d.startsWith(id)&&!holidayOn(d)).length+' missing'})));
     $('entryMonth').value=months.includes(current)?current:options.dates.at(-1)?.slice(0,7)||months[0];renderMonth();
@@ -112,26 +128,57 @@ async function loadOptions(){
   finally{loading=false;$('reloadEntries').disabled=false;}
 }
 $('entryMonth').onchange=renderMonth;$('reloadEntries').onclick=()=>{session();loadOptions();};
-$('selectAllDates').onchange=()=>{const value=$('selectAllDates').checked;batch=true;sheet.getData().forEach((_,i)=>{if(!holidayOn(visibleDates[i]))sheet.setValueFromCoords(0,i,value);});batch=false;update();};
+$('selectAllDates').onchange=()=>{const value=$('selectAllDates').checked;batch=true;sheet.getData().forEach((_,i)=>{if(canEditDate(visibleDates[i]))sheet.setValueFromCoords(0,i,value);});batch=false;update();};
 function fill(selectedOnly){
   if(!sheet)return;
   const entry={startTime:$('bulkStart').value,endTime:$('bulkEnd').value,projectCode:$('bulkProject').value,projectFunctionId:$('bulkFunction').value,duration:$('bulkDuration').value,remark:$('bulkRemark').value};
   const error=problem(entry);$('entryAlert').hidden=!error;if(error){$('entryAlert').textContent=error+'. Check the fill values and try again.';return;}
   const cells=[];let count=0;
-  sheet.getData().forEach((row,y)=>{if(holidayOn(visibleDates[y])||(selectedOnly&&!checked(row[0])))return;count++;[entry.startTime,entry.endTime,entry.projectCode,entry.projectFunctionId,entry.duration,entry.remark].forEach((value,i)=>cells.push({x:i+3,y,value}));});
+  sheet.getData().forEach((row,y)=>{if(!canEditDate(visibleDates[y])||(selectedOnly&&!checked(row[0])))return;outcomes.delete(visibleDates[y]);count++;[entry.startTime,entry.endTime,entry.projectCode,entry.projectFunctionId,entry.duration,entry.remark].forEach((value,i)=>cells.push({x:i+3,y,value}));});
   batch=true;sheet.setValue(cells);batch=false;update();$('bulkMessage').textContent='Filled '+count+' '+(count===1?'date':'dates')+'.';
 }
 $('fillAll').onclick=()=>fill(false);$('fillSelected').onclick=()=>fill(true);
 $('undoEntry').onclick=()=>{sheet?.undo();update();};$('redoEntry').onclick=()=>{sheet?.redo();update();};
-$('reviewSelected').onclick=()=>{
-  const entries=snapshot().flatMap((row,i)=>checked(row[0])&&!holidayOn(visibleDates[i])?[entryFromRow(row,visibleDates[i])]:[]);const invalid=entries.filter(problem);
+function syncSubmitButton(){
+  if(!$('submitEntries'))return;
+  const uncertain=reviewedEntries.some(e=>outcomes.get(e.workDate)?.status==='unknown');
+  $('submitEntries').textContent=submitting?'Submitting…':pendingSubmission?'Retry / check result':reviewMode==='results'?(uncertain?'Check result':'Submitted'):'Submit '+reviewedEntries.length+' '+(reviewedEntries.length===1?'entry':'entries');
+  $('submitEntries').disabled=submitting||!sessionAvailable||!options?.submissionEnabled||!reviewedEntries.length||(reviewMode==='results'?!uncertain:reviewedEntries.some(problem));
+  for(const id of ['closeReview','backToEdit'])$(id).disabled=submitting;
+}
+function renderReview(){
+  const entries=reviewedEntries,invalid=entries.filter(problem);
   $('reviewSummary').textContent=entries.length+' '+(entries.length===1?'entry':'entries')+' selected · '+entries.reduce((sum,e)=>sum+(Number(e.duration)||0),0)+' hours';
   $('reviewError').hidden=!invalid.length;$('reviewError').textContent=invalid.length+' '+(invalid.length===1?'entry needs':'entries need')+' attention. Check the Validation column before submitting.';
-  $('reviewRows').replaceChildren();for(const entry of entries){const tr=document.createElement('tr');for(const value of [displayDate(entry.workDate),entry.startTime,entry.endTime,options.projects.find(p=>p.id===entry.projectCode)?.name||'Choose project',options.functions.find(f=>f.id===entry.projectFunctionId&&f.projectId===entry.projectCode)?.name||'Choose function',entry.duration,entry.remark||'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}$('reviewRows').append(tr);}
+  $('reviewRows').replaceChildren();for(const entry of entries){const tr=document.createElement('tr');for(const value of [displayDate(entry.workDate),entry.startTime,entry.endTime,options.projects.find(p=>p.id===entry.projectCode)?.name||'Choose project',options.functions.find(f=>f.id===entry.projectFunctionId&&f.projectId===entry.projectCode)?.name||'Choose function',entry.duration,entry.remark||'—',outcomes.get(entry.workDate)?.message||'Ready to submit']){const td=document.createElement('td');td.textContent=value;tr.append(td);}$('reviewRows').append(tr);}syncSubmitButton();
+}
+$('reviewSelected').onclick=()=>{
+  reviewMode='create';reviewedEntries=pendingSubmission?.entries||snapshot().flatMap((row,i)=>checked(row[0])&&canEditDate(visibleDates[i])?[entryFromRow(row,visibleDates[i])]:[]);renderReview();
+  $('reviewActionNote').textContent=pendingSubmission?'Retry checks the earlier submission without resending recorded entries.':'Creates past check-ins with pending approval.';
   $('entryReview').showModal();
 };
-for(const id of ['closeReview','backToEdit'])$(id).onclick=()=>$('entryReview').close();
+for(const id of ['closeReview','backToEdit'])$(id).onclick=()=>{if(!submitting)$('entryReview').close();};
+$('entryReview').addEventListener('cancel',e=>{if(submitting)e.preventDefault();});
 $('entryReview').addEventListener('close',()=>$('reviewSelected').focus());
+$('submitEntries').onclick=async()=>{
+  if(submitting||$('submitEntries').disabled)return;
+  const payload=pendingSubmission||(reviewMode==='results'?lastSubmission:{requestId:crypto.randomUUID(),entries:reviewedEntries.map(e=>({...e}))});
+  pendingSubmission=payload;submitting=true;syncSubmitButton();$('reviewError').hidden=true;$('reviewActionNote').textContent='Submitting selected dates. Keep this page open.';
+  try{
+    const result=await request('/entries','POST',payload);lastSubmission=payload;
+    for(const row of result.results)outcomes.set(row.workDate,row);
+    pendingSubmission=null;reviewMode='results';
+    const recorded=result.results.filter(r=>['created','alreadyRecorded'].includes(r.status)).length,failed=result.results.filter(r=>r.status==='failed').length,unknown=result.results.filter(r=>r.status==='unknown').length,remaining=result.results.filter(r=>r.status==='notSubmitted').length;
+    $('submissionNotice').hidden=false;$('submissionMessage').textContent=recorded+' recorded'+(failed?' · '+failed+' rejected':'')+(unknown?' · '+unknown+' need checking':'')+(remaining?' · '+remaining+' not submitted':'');
+    for(const row of result.results)if(['created','alreadyRecorded'].includes(row.status)){draftByDate.delete(row.workDate);options.dates=options.dates.filter(d=>d!==row.workDate);options.calendarDates=options.calendarDates.filter(d=>d!==row.workDate);}
+    renderMonth();await loadOptions();renderReview();$('reviewActionNote').textContent=unknown?'Check check-in history for unconfirmed dates. These dates are protected from repeat submission.':failed||remaining?'Recorded dates are removed. Close this dialog to review and retry the remaining dates.':'Selected dates are recorded in the portal.';
+  }catch(e){
+    if(e.status>=400&&e.status<500&&e.status!==409)pendingSubmission=null;
+    $('reviewError').textContent=e.status?e.message:'The submission response was interrupted. Retry to check what was recorded.';$('reviewError').hidden=false;$('reviewActionNote').textContent=pendingSubmission?'Use Retry / check result to recover the earlier submission.':'Review the details and reopen this dialog before submitting.';
+  }finally{submitting=false;syncSubmitButton();}
+};
+$('viewSubmissionResults').onclick=()=>{if(!lastSubmission)return;reviewMode='results';reviewedEntries=lastSubmission.entries;renderReview();$('reviewActionNote').textContent='Results of the last submission.';$('entryReview').showModal();};
+window.addEventListener('beforeunload',e=>{if(submitting){e.preventDefault();e.returnValue='';}});
 
 let holidayData=null,holidayDraft=[],editingDate=null,holidayBusy=false;
 const holidayError=message=>{$('holidayError').textContent=message;$('holidayError').hidden=!message;};

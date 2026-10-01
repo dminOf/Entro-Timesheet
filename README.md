@@ -7,7 +7,7 @@ The portal requires a fresh reCAPTCHA token, then authenticates API requests wit
 ## Setup and login
 
 ```sh
-npm install
+npm ci
 # Supply ENTRO_USERNAME and ENTRO_PASSWORD through your shell or a private .env.
 node --env-file=.env src/cli.js login --headless
 # Visible browser fallback (credentials still supplied via environment):
@@ -15,6 +15,8 @@ node --env-file=.env src/cli.js login --headed
 # Alternatively, enter credentials yourself in the browser:
 npm run login -- --manual
 ```
+
+Run commands from the repository root. A private `.env` can be created from `.env.example`; npm scripts do not load it automatically, so use `node --env-file=.env` or export the variables. Manual login needs no credential variables. See [AGENTS.md](AGENTS.md) for Chrome requirements and the full local web-server setup.
 
 Headless login is the default. A fresh headless attempt on 1 October 2026 returned HTTP 400 because the portal rejected reCAPTCHA; unattended login is therefore not confirmed. Use `--headed` or `--manual` when this occurs. No browser fingerprint changes or reCAPTCHA bypass are applied.
 
@@ -32,13 +34,19 @@ The **Holidays** button opens the public holiday master. The initial 2026 calend
 
 Fill rows individually or apply the bulk values to all dates in the selected month or only checked rows. A top checkbox selects every date in that month. The review dialog shows selected entries before submission. Project/function, time and half-hour duration validation follow the supplied past-check-in form; elapsed time and selected work hours remain separate.
 
-This is a form design preview: drafts live in page memory, survive month changes, and reset on a page reload. Submission is disabled in the form, so no entries are created by using it. The local API does expose a guarded batch submission route; calling that route can create real past check-ins. See `AGENTS.md` for the server-side safeguards.
+Creation is enabled: select dates, review their details, then use **Submit entries** to create pending past check-ins in the portal. The local server rechecks eligible dates, existing attendance, holidays, projects, functions, times and duration before sending any writes. The authenticated cookie remains on the server.
+
+Each date receives a result. Recorded dates are removed from the sheet; rejected and unattempted dates stay editable. Repeated requests reuse a locally saved receipt, and recorded dates are not resent. Transport or server failures with an uncertain outcome stop the batch and hold that date from resubmission; **Check result** can confirm it once it appears in check-in history. If it remains unconfirmed, inspect history before resolving it manually. Entries are sent sequentially and a batch is not an atomic transaction. See `AGENTS.md` for the server-side safeguards.
+
+Unsubmitted drafts live in page memory, survive month changes, and reset on reload. Submission receipts persist locally per account. Creation has been validated using mocked portal responses; enabling the feature did not create any live entries.
 
 Install or update the shared local web-server adapters with:
 
 ```sh
 npm run setup:local-login
 ```
+
+The browser UI requires the separate Bun web server; this repository does not start it. The installer defaults to this machine's shared `apps` directory. On another machine, use `ENTRO_WEB_APPS_DIR=/absolute/path/to/shared-web-server/apps npm run setup:local-login`. Reinstall after frontend changes or moving the SDK checkout because assets are copied and adapters use absolute source paths. Keep the private holiday master and submission receipts when updating.
 
 The portal link opens the real login page in your browser. Signing in there does not automatically replace the saved SDK session; importing a session from your own browser profile still needs a browser bridge. No generic login window is launched from the local portal.
 

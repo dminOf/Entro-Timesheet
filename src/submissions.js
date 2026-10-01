@@ -31,10 +31,18 @@ export function createSubmissionService({directory=fileURLToPath(new URL('../.pr
           prior.results=prior.results.map(result=>result.status==='processing'?{...result,status:'unknown',message:'Check-in history must be checked before retrying.'}:result);
           prior.state='complete';await persist(path,data);
         }
+        if(prior.results.some(r=>r.status==='unknown')){
+          const options=await loadOptions(client),existing=new Set(options.existingDates);
+          for(const result of prior.results)if(result.status==='unknown'&&existing.has(result.workDate)){
+            result.status='alreadyRecorded';result.message='Confirmed in check-in history.';data.dates[result.workDate]={status:'created'};
+          }
+          await persist(path,data);
+        }
         return publicResult(prior);
       }
       const options=await loadOptions(client),holidays=new Set(options.holidays.map(h=>h.date)),existing=new Set(options.existingDates),eligible=new Set(missingWeekdays(options.dates,options.today));
       const entries=input.entries.map(entry=>{
+        if(typeof entry?.remark==='string'&&entry.remark.length>2000)throw new SubmissionError('Descriptions must be 2000 characters or fewer.');
         if(holidays.has(entry?.workDate)||!missingWeekdays([entry?.workDate],options.today).length)throw new SubmissionError('Holidays, weekends and future dates cannot be submitted.');
         if(!existing.has(entry.workDate)&&!eligible.has(entry.workDate))throw new SubmissionError('A selected date is no longer eligible. Refresh missing dates before submitting.');
         try{return validateDraft(entry,options.projects,options.functions);}catch(e){throw new SubmissionError(e.name==='EntroError'?'Check the entry date, times, duration and description.':e.message);}
@@ -51,7 +59,8 @@ export function createSubmissionService({directory=fileURLToPath(new URL('../.pr
         }
         batch.results[i]={workDate:date,status:'processing',message:'Submitting…'};data.dates[date]={status:'processing'};await persist(path,data);
         try{
-          await client.createPastCheckin(entry,{dryRun:false});
+          const response=await client.createPastCheckin(entry,{dryRun:false});
+          if(!['20000','20100'].includes(String(response?.resultCode)))throw new Error('Creation was not confirmed.');
           data.dates[date]={status:'created'};batch.results[i]={workDate:date,status:'created',message:'Created; pending approval.'};
         }catch(e){
           const rejected=(e.status>=400&&e.status<500)||e.resultCode!=null;
