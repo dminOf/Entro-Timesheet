@@ -1,0 +1,22 @@
+{
+  "name": "entro-timesheet-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/client.js",
+  "scripts": {
+    "test": "node --test",
+    "login": "node src/cli.js login",
+    "read": "node src/cli.js",
+    "verify:reads": "node scripts/verify-reads.js",
+    "setup:local-login": "node local-login/install.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "jspreadsheet-ce": "^5.0.4",
+    "jsuites": "^5.13.5",
+    "playwright": "^1.58.2"
+  }
+}
