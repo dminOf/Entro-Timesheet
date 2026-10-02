@@ -5,8 +5,11 @@ const paths = Object.freeze({
   overtime: '/timesheet/ot', leaveHistory: '/timesheet/leave',
   leaveBalance: '/timesheet/leave/remain', holidays: '/timesheet/leave/holiday',
   siteWorktime: '/timesheet/site/worktime', missingCheckins: '/timesheet/user/miss/check-in',
-  menu: '/auth/menu',
+  menu: '/auth/menu', projectsAllStaff: '/master/projects-all/staff',
+  projectsAllStaffOnsite: '/master/projects-all/staff-onsite',
 });
+// The portal's favorite page also treats 20001 as success.
+const FAVORITE_SUCCESS = ['20000','20001','20100'];
 export class EntroError extends Error {
   constructor(message, {status, resultCode} = {}) {
     super(message); this.name = 'EntroError'; this.status = status; this.resultCode = resultCode;
@@ -40,11 +43,40 @@ export function preparePastCheckin(entry) {
   };
   return {method:'POST',url:`${ORIGIN}/api/v1/timesheet/user/check-in`,body};
 }
+/** Prepare a favorite-project add or remove without authentication or network activity. */
+export function prepareFavoriteProject(action, {projectId, projectCode, projectFavoriteId} = {}) {
+  const id = value => (typeof value === 'string' && /^[\w.-]{1,100}$/.test(value)) || (Number.isSafeInteger(value) && value > 0);
+  if (!id(projectId)) throw new EntroError('projectId is required.');
+  if (projectCode != null && typeof projectCode !== 'string') throw new EntroError('projectCode must be a string.');
+  const body = {projectId, ...(projectCode ? {projectCode} : {})};
+  const url = `${ORIGIN}/api/v1/timesheet/project/favorite`;
+  if (action === 'add') return {method:'POST',url,body};
+  if (action !== 'remove') throw new EntroError('Unknown favorite action.');
+  if (!id(projectFavoriteId)) throw new EntroError('projectFavoriteId is required.');
+  // The portal removes a favorite by deactivating it.
+  return {method:'PUT',url:`${url}/${encodeURIComponent(projectFavoriteId)}`,body:{...body,isActive:'N'}};
+}
+/** Prepare a project-function create, update or remove without authentication or network activity. */
+export function prepareProjectFunction(action, {projectFunctionId, projectId, projectName, functionCode, functionDesc, status} = {}) {
+  const id = value => typeof value === 'string' && /^[\w.-]{1,100}$/.test(value);
+  const url = `${ORIGIN}/api/v1/timesheet/project-function`;
+  if (!['create','update','remove'].includes(action)) throw new EntroError('Unknown project-function action.');
+  if (action !== 'create' && !id(projectFunctionId)) throw new EntroError('projectFunctionId is required.');
+  // The portal removes a function by deactivating it.
+  if (action === 'remove') return {method:'PUT',url:`${url}/${encodeURIComponent(projectFunctionId)}`,body:{isActive:'N'}};
+  if (!id(projectId)) throw new EntroError('projectId is required.');
+  if (typeof functionDesc !== 'string' || !functionDesc.trim() || functionDesc.trim().length > 250) throw new EntroError('functionDesc must be 1 to 250 characters.');
+  if (functionCode != null && (typeof functionCode !== 'string' || functionCode.trim().length > 50)) throw new EntroError('functionCode must be up to 50 characters.');
+  if (!['Active','Inactive'].includes(status)) throw new EntroError('status must be Active or Inactive.');
+  if (projectName != null && typeof projectName !== 'string') throw new EntroError('projectName must be a string.');
+  const body = {projectId, projectName:projectName ?? '', functionCode:functionCode?.trim() || null, functionDesc:functionDesc.trim(), status};
+  return action === 'create' ? {method:'POST',url,body} : {method:'PUT',url:`${url}/${encodeURIComponent(projectFunctionId)}`,body};
+}
 export class EntroClient {
   #token; #fetch;
-  userId;
-  constructor({accessToken = process.env.ENTRO_ACCESS_TOKEN, fetchImpl = fetch, userId} = {}) {
-    this.userId = userId;
+  userId; roles;
+  constructor({accessToken = process.env.ENTRO_ACCESS_TOKEN, fetchImpl = fetch, userId, roles = []} = {}) {
+    this.userId = userId; this.roles = Array.isArray(roles) ? roles.filter(r => typeof r === 'string') : [];
     if (!accessToken || /[\r\n;]/.test(accessToken)) throw new EntroError('A valid ENTRO_ACCESS_TOKEN or authenticated session is required.');
     this.#token = accessToken; this.#fetch = fetchImpl;
   }
@@ -56,7 +88,7 @@ export class EntroClient {
     if (!cookie || (cookie.expires > 0 && cookie.expires <= Date.now()/1000)) throw new EntroError('Session missing or expired; log in again.');
     let user;
     try { user = JSON.parse(state.origins?.find(o=>o.origin === ORIGIN)?.localStorage?.find(v=>v.name === "currentUser")?.value ?? "null"); } catch {}
-    return new EntroClient({...options, userId:user?.userId, accessToken: cookie.value});
+    return new EntroClient({...options, userId:user?.userId, roles:user?.roles, accessToken: cookie.value});
   }
   /** Reuse a validated local session; invoke normal browser login when needed. */
   static async connect({sessionPath = '.private/session.json', fetchImpl = fetch, ...loginOptions} = {}) {
@@ -115,6 +147,46 @@ export class EntroClient {
     });
     return decode(response);
   }
+  /** Defaults to preview; changing favorites requires dryRun: false. No automatic retries. */
+  async addFavoriteProject(project, {dryRun = true} = {}) {
+    return this.#write(prepareFavoriteProject('add',project),dryRun,FAVORITE_SUCCESS);
+  }
+  async removeFavoriteProject(favorite, {dryRun = true} = {}) {
+    return this.#write(prepareFavoriteProject('remove',favorite),dryRun,FAVORITE_SUCCESS);
+  }
+  /** Defaults to preview; changing functions requires dryRun: false. No automatic retries. */
+  async createProjectFunction(fields, {dryRun = true} = {}) {
+    return this.#write(prepareProjectFunction('create',fields),dryRun,['20000']);
+  }
+  async updateProjectFunction(fields, {dryRun = true} = {}) {
+    return this.#write(prepareProjectFunction('update',fields),dryRun,['20000']);
+  }
+  async removeProjectFunction(fields, {dryRun = true} = {}) {
+    return this.#write(prepareProjectFunction('remove',fields),dryRun,['20000']);
+  }
+  async #write(request, dryRun, success) {
+    if (typeof dryRun !== 'boolean') throw new EntroError('dryRun must be boolean.');
+    if (dryRun) return {...request,dryRun:true};
+    const response = await this.#fetch(request.url, {
+      method:request.method, redirect:'error', signal:AbortSignal.timeout(30000),
+      headers:{Accept:'application/json','Content-Type':'application/json',Cookie:`accessToken=${this.#token}`},
+      body:JSON.stringify(request.body),
+    });
+    return decode(response,success);
+  }
+  /** Every project the account may favorite, from the portal's role-specific list. Reads all pages. */
+  async allProjects({onsite = this.roles.includes('Staff Onsite'), projectName} = {}) {
+    if (!onsite && !this.userId) throw new EntroError('allProjects requires userId; use the login user.');
+    const projects = [];
+    for (let page = 1; page <= 50; page++) {
+      const result = await this.read(onsite ? 'projectsAllStaffOnsite' : 'projectsAllStaff', {page, pageSize:100,
+        sort:'projectName', order:'asc', projectName, ...(onsite ? {currentSite:'Y'} : {userId:this.userId})});
+      const rows = Array.isArray(result.resultData) ? result.resultData : [];
+      projects.push(...rows);
+      if (rows.length < 100 || projects.length >= Number(result.recordsTotal ?? projects.length)) return projects;
+    }
+    throw new EntroError('Unable to load the complete project list.');
+  }
   worklogs(params = {}) {
     const query = {userId:this.userId,...params};
     if (!query.userId) throw new EntroError('worklogs requires userId; use the login user or supply it explicitly.');
@@ -127,10 +199,10 @@ export class EntroClient {
   leaveHistory(params) { return this.read('leaveHistory',params); }
   leaveBalance(params) { return this.read('leaveBalance',params); }
 }
-async function decode(response) {
+async function decode(response, success = ['20000','20100']) {
   if (!response.ok) throw new EntroError(response.status === 401 || response.status === 403 ? 'Session expired or permission denied.' : 'Portal request failed.', {status:response.status});
   let data; try {data = await response.json();} catch {throw new EntroError('Portal returned a non-JSON response.',{status:response.status});}
-  if (data.resultCode != null && !['20000','20100'].includes(String(data.resultCode))) {
+  if (data.resultCode != null && !success.includes(String(data.resultCode))) {
     throw new EntroError('Portal reported an application error.', {status:response.status,resultCode:data.resultCode});
   }
   return data;

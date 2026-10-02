@@ -6,6 +6,8 @@ import {queryForView,presentView} from './portal-views.js';
 import {missingWeekdays} from './entry-draft.js';
 import {holidayMaster} from './holidays.js';
 import {submissions} from './submissions.js';
+import {favorites} from './favorites.js';
+import {projectFunctions} from './project-functions.js';
 const sessionPath=fileURLToPath(new URL('../.private/session.json',import.meta.url));
 const profilePath=fileURLToPath(new URL('../.private/local-login-profile',import.meta.url));
 let state={phase:'idle',message:''};
@@ -94,6 +96,19 @@ async function entryOptionsFor(client) {
 }
 
 export async function submitEntries(input){return submissions.submit(await EntroClient.fromStorageState(sessionPath),input,entryOptionsFor);}
+
+export async function favoriteOptions(){return favorites.options(await EntroClient.fromStorageState(sessionPath));}
+export async function changeFavorite(input){return favorites.change(await EntroClient.fromStorageState(sessionPath),input,{dryRun:false});}
+
+// Mirror the portal: a menu entry for the page can switch actions off; no entry leaves them on.
+async function functionPermissions(){
+  const saved=JSON.parse(await readFile(sessionPath,'utf8'));
+  const menu=JSON.parse(saved.origins?.find(o=>o.origin==='https://ofs.entro-lab.com')?.localStorage?.find(v=>v.name==='menu')?.value??'[]');
+  const item=menu.flatMap(group=>group.menuPermission??[]).find(entry=>String(entry.menuPath??'').includes('/office-system/timesheet/project-function'))?.menuPermissionItem;
+  return item?{add:item.enableAdd==='Y',edit:item.enableEdit==='Y',remove:item.enableDelete==='Y'}:{add:true,edit:true,remove:true};
+}
+export async function functionOptions(){return projectFunctions.options(await EntroClient.fromStorageState(sessionPath),{permissions:await functionPermissions()});}
+export async function changeFunction(input){return projectFunctions.change(await EntroClient.fromStorageState(sessionPath),input,{dryRun:false,permissions:await functionPermissions()});}
 
 export async function readHolidays(year){return holidayMaster.read(await EntroClient.fromStorageState(sessionPath),year);}
 export async function saveHolidays(input){return holidayMaster.save(await EntroClient.fromStorageState(sessionPath),input);}

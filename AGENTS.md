@@ -10,6 +10,8 @@ This project provides a Node.js ES-module SDK and CLI for the OfficeSystem times
 - `src/local-login.js` and `src/portal-views.js`: session status, entry options, account-specific lookups, and presentation of the seven read views without exposing internal record identifiers.
 - `src/entry-draft.js`: weekday/date eligibility and draft validation, including project/function membership. Selected work hours remain independent of elapsed time.
 - `src/holidays.js` and `data/public-holidays-2026.json`: account-specific local holiday master, seeded with the company calendar for 2026 and portal holidays for other years. Changes remain local; stale saves are rejected.
+- `src/favorites.js`: favorite-project listing and add/remove service. Changes are validated against fresh portal reads, serialized, never retried, and resolve the favorite record identifier on the server only.
+- `src/project-functions.js`: project-function listing and create/update/remove service with the same fresh-read validation, serialization and no-retry rules, plus duplicate-name checks and the portal's menu permissions.
 - `src/submissions.js`: server-side batch submission service with private account-specific journals, duplicate protection, and uncertain-outcome handling. The entry-page review dialog exposes creation after explicit user submission. Never assume the adapter is read-only.
 - `src/local-api.js`: shared local API handler used by both server options; owns localhost, same-origin and write-header guards.
 - `src/local-server.js`: standalone Node HTTP server; binds only to `127.0.0.1` and serves an explicit public-asset list, never the whole checkout.
@@ -86,7 +88,7 @@ Run `npm test` after relevant changes. `npm run verify:reads` requires a real au
 
 ## Write safeguards
 
-Preserve preview-by-default behavior in the SDK and CLI. Actual past-check-in writes require `dryRun: false` or `--submit`. Server-side batch submission must retain date/holiday checks, fresh eligibility checks, project/function validation, account serialization, and persistent duplicate protection. Do not automatically retry a write with an uncertain result; inspect check-in history first. Keep localhost restrictions, same-origin checks, the custom request header, request-size limits, and sanitized errors in both local server options. Keep the standalone server bound to loopback and its asset list explicit; never add whole-directory static serving for the repository or expose it to the network.
+Preserve preview-by-default behavior in the SDK and CLI. Actual past-check-in writes require `dryRun: false` or `--submit`. Server-side batch submission must retain date/holiday checks, fresh eligibility checks, project/function validation, account serialization, and persistent duplicate protection. Do not automatically retry a write with an uncertain result; inspect check-in history first. Favorite-project and project-function changes also preview by default in the SDK and CLI (`dryRun: false` or `--submit`), and the local API must keep their fresh-read validation, serialization and no-retry behavior. Keep localhost restrictions, same-origin checks, the custom request header, request-size limits, and sanitized errors in both local server options. Keep the standalone server bound to loopback and its asset list explicit; never add whole-directory static serving for the repository or expose it to the network.
 
 ## Secrets and private data
 

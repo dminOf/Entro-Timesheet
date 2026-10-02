@@ -1,5 +1,7 @@
 import {EntroClient, EntroError, preparePastCheckin} from './client.js';
 import {browserLogin} from './browser-login.js';
+import {favorites} from './favorites.js';
+import {projectFunctions} from './project-functions.js';
 const [command,...args] = process.argv.slice(2);
 try {
   if (command === 'login') {
@@ -16,6 +18,28 @@ try {
       const client = process.env.ENTRO_ACCESS_TOKEN ? new EntroClient() : await EntroClient.fromStorageState('.private/session.json');
       console.log(JSON.stringify(await client.createPastCheckin(entry,{dryRun:false}),null,2));
     }
+  } else if (command === 'projects') {
+    if (args.length) throw new EntroError('Use projects.');
+    const client = process.env.ENTRO_ACCESS_TOKEN ? new EntroClient() : await EntroClient.fromStorageState('.private/session.json');
+    console.log(JSON.stringify(await favorites.options(client),null,2));
+  } else if (command === 'favorite-add' || command === 'favorite-remove') {
+    const [projectId,flag,...extra] = args;
+    if (!projectId || extra.length || (flag !== undefined && flag !== '--submit')) throw new EntroError(`Use ${command} projectId [--submit].`);
+    // Preview still reads the portal so it validates against current favorites.
+    const client = process.env.ENTRO_ACCESS_TOKEN ? new EntroClient() : await EntroClient.fromStorageState('.private/session.json');
+    const action = command === 'favorite-add' ? 'add' : 'remove';
+    console.log(JSON.stringify(await favorites.change(client,{action,projectId},{dryRun:flag !== '--submit'}),null,2));
+  } else if (command === 'functions') {
+    if (args.length) throw new EntroError('Use functions.');
+    const client = process.env.ENTRO_ACCESS_TOKEN ? new EntroClient() : await EntroClient.fromStorageState('.private/session.json');
+    console.log(JSON.stringify(await projectFunctions.options(client),null,2));
+  } else if (command === 'function-change') {
+    const {readFile} = await import('node:fs/promises');
+    const [file,flag,...extra] = args;
+    if (!file || extra.length || (flag !== undefined && flag !== '--submit')) throw new EntroError('Use function-change change.json [--submit].');
+    // Preview still reads the portal so it validates against current functions.
+    const client = process.env.ENTRO_ACCESS_TOKEN ? new EntroClient() : await EntroClient.fromStorageState('.private/session.json');
+    console.log(JSON.stringify(await projectFunctions.change(client,JSON.parse(await readFile(file,'utf8')),{dryRun:flag !== '--submit'}),null,2));
   } else {
     const params = Object.fromEntries(args.map(arg=>{
       const split = arg.indexOf('='); if (split < 1) throw new Error('Use key=value query arguments.');
@@ -25,4 +49,4 @@ try {
     const response = command === 'worklogs' ? await client.worklogs(params) : await client.read(command,params);
     console.log(JSON.stringify(response,null,2));
   }
-} catch(error) { console.error(error.name === 'EntroError' ? error.message : 'Operation failed. Check login, session and command arguments.'); process.exitCode=1; }
+} catch(error) { console.error(['EntroError','FavoriteError','FunctionError'].includes(error.name) ? error.message : 'Operation failed. Check login, session and command arguments.'); process.exitCode=1; }

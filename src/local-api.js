@@ -2,7 +2,7 @@ import * as portal from './local-login.js';
 
 // Both local servers use this handler so authentication and write guards stay aligned.
 export function createLocalApi(services=portal) {
-  const {status,cancelLogin,verifySession,readPortalView,entryOptions,readHolidays,saveHolidays,submitEntries}=services;
+  const {status,cancelLogin,verifySession,readPortalView,entryOptions,readHolidays,saveHolidays,submitEntries,favoriteOptions,changeFavorite,functionOptions,changeFunction}=services;
   return async function handle(req) {
     const url=new URL(req.url);
     const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
@@ -16,6 +16,14 @@ export function createLocalApi(services=portal) {
     if(req.method==='GET'&&url.pathname.endsWith('/api/entry-options')) {
       try{return Response.json(await entryOptions(),{headers});}
       catch{return Response.json({error:'Unable to load missing dates and projects. Verify your session and retry.'},{status:502,headers});}
+    }
+    if(req.method==='GET'&&url.pathname.endsWith('/api/favorites')){
+      try{return Response.json(await favoriteOptions(),{headers});}
+      catch{return Response.json({error:'Unable to load projects. Verify your session and retry.'},{status:502,headers});}
+    }
+    if(req.method==='GET'&&url.pathname.endsWith('/api/functions')){
+      try{return Response.json(await functionOptions(),{headers});}
+      catch{return Response.json({error:'Unable to load project functions. Verify your session and retry.'},{status:502,headers});}
     }
     if(req.method==='GET'&&url.pathname.endsWith('/api/view')) {
       try{return Response.json(await readPortalView(url.searchParams.get('resource'),Object.fromEntries(url.searchParams)),{headers});}
@@ -36,6 +44,18 @@ export function createLocalApi(services=portal) {
         const body=await req.text();if(body.length>100000)return Response.json({error:'Holiday list is too large.'},{status:400,headers});
         return Response.json(await saveHolidays(JSON.parse(body)),{headers});
       }catch(error){return Response.json({error:['Choose a year from 1900 to 2200.','A holiday list is required.','Every holiday must have a valid date in the selected year.','Give each holiday a name of up to 250 characters.','Only one holiday is allowed per date.','Load this year before saving changes.','The holiday list has changed. Reload it before saving.'].includes(error.message)?error.message:'Unable to save the holiday list.'},{status:400,headers});}
+    }
+    else if(action==='favorites'){
+      try{
+        const body=await req.text();if(body.length>1000)return Response.json({error:'Request is too large.'},{status:400,headers});
+        return Response.json(await changeFavorite(JSON.parse(body)),{headers});
+      }catch(error){return Response.json({error:error.name==='FavoriteError'?error.message:'The favorite could not be changed. Verify your session and try again.'},{status:error.name==='FavoriteError'?error.status:502,headers});}
+    }
+    else if(action==='functions'){
+      try{
+        const body=await req.text();if(body.length>2000)return Response.json({error:'Request is too large.'},{status:400,headers});
+        return Response.json(await changeFunction(JSON.parse(body)),{headers});
+      }catch(error){return Response.json({error:error.name==='FunctionError'?error.message:'The function could not be saved. Verify your session and try again.'},{status:error.name==='FunctionError'?error.status:502,headers});}
     }
     else if(action==='cancel')cancelLogin();
     else if(action==='verify')await verifySession();

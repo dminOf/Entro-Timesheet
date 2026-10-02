@@ -19,6 +19,7 @@ All paths below have prefix `/api/v1`. These are confirmed in the publicly serve
 | worklogs | `/timesheet` | `userId`, `month` (1–12), `year`, `page`, `pageSize`, `sort`, `order` |
 | checkins | `/timesheet/check-in` | `checkOutFlag`, `dateFrom`, pagination, sort/order |
 | favoriteProjects | `/timesheet/project/favorite` | `isActive=Y`, `pageSize=100` |
+| projectsAllStaffOnsite / projectsAllStaff | `/master/projects-all/staff-onsite` / `/master/projects-all/staff` | see favorite-project contract |
 | projectFunctions | `/timesheet/project-function` | `projectId`, `status=Active`, `isActive=Y`, pagination |
 | overtime | `/timesheet/ot` | `year`, `month`, `page`, `pageSize`, `order=asc` (observed live); additional filters pending |
 | leaveHistory | `/timesheet/leave` | `page`, `pageSize`, `order=asc` (observed live) |
@@ -45,6 +46,16 @@ Seven SDK resources returned HTTP success and resultCode `20000`: worklogs, chec
 The October work-log and overtime reads returned empty arrays, so their populated record schemas remain unverified. The other core resources returned arrays with records. No create/update/delete actions were performed. The twelve-hour session behavior is based on the supplied cookie attributes; expiry was not tested by waiting.
 
 A repeatable structural report is in `read-verification.jsonl`. It contains query-key names and response-field names, without account identifiers or record values. Date-filter semantics, broader pagination behavior, optional resources and exports still require further validation.
+
+## Favorite-project contract
+
+Derived from the portal's Favorite Project page and shared service code. All-project reads depend on role: accounts with the `Staff Onsite` role use `GET /api/v1/master/projects-all/staff-onsite` with `currentSite=Y`; other accounts use `GET /api/v1/master/projects-all/staff` with `userId`. Both take `page`, `pageSize`, `sort=projectName`, `order` and an optional `projectName` filter, and return `projectId`, `siteId` and `projectName`. A live onsite read accepted `pageSize=100` and rejected `pageSize=300` with HTTP 400; the staff variant has not been read live.
+
+Adding uses `POST /api/v1/timesheet/project/favorite` with `{projectId, projectCode}`; all-project rows carry no `projectCode`, so the portal effectively sends `projectId` alone. Removal is a soft delete: `PUT /api/v1/timesheet/project/favorite/{projectFavoriteId}` with `{projectId, projectCode, isActive: "N"}`. The portal page treats resultCode `20000` or `20001` as success. Identifiers observed live are 36-character strings. Request shapes are covered by mocked tests; no live add or remove was executed during implementation.
+
+## Project-function contract
+
+Derived from the portal's Project Function page. `GET /api/v1/timesheet/project-function` returns only the signed-in account's functions in observed reads. Creation uses `POST /api/v1/timesheet/project-function` with `{projectId, projectName, functionCode, functionDesc, status}`; the page offers active favorite projects, requires project, description and status (`Active` or `Inactive`), trims the description and sends an empty code as `null`. Updates use `PUT /api/v1/timesheet/project-function/{projectFunctionId}` with the same body. Removal is a soft delete: `PUT /api/v1/timesheet/project-function/{projectFunctionId}` with `{isActive: "N"}`. The page treats only resultCode `20000` as success. Its add, edit and delete controls follow `enableAdd`, `enableEdit` and `enableDelete` on the matching entry of the saved `menu`; with no matching entry, all are enabled. The page shows no field length limits; the SDK caps descriptions at 250 and codes at 50 characters as a local safeguard. Request shapes are covered by mocked tests; no live create, update or remove was executed during implementation.
 
 ## Past check-in creation contract
 
