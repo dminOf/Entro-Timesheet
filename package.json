@@ -9,7 +9,8 @@
     "login": "node src/cli.js login",
     "read": "node src/cli.js",
     "verify:reads": "node scripts/verify-reads.js",
-    "setup:local-login": "node local-login/install.js"
+    "setup:local-login": "node local-login/install.js",
+    "start": "node src/local-server.js"
   },
   "engines": {
     "node": ">=22"

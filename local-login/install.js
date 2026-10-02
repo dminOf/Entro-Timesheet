@@ -6,8 +6,8 @@ const destination=resolve(process.env.ENTRO_WEB_APPS_DIR || '/Users/dushyantmin/
 await mkdir(destination,{recursive:true});
 for(const name of ['api','index']) {
  const source=await readFile(new URL(`${name}.template.ts`,import.meta.url),'utf8');
- const moduleFile=fileURLToPath(new URL('../src/local-login.js',import.meta.url));
- const version=createHash('sha256').update(await readFile(moduleFile)).update(await readFile(new URL('../src/portal-views.js',import.meta.url))).update(await readFile(new URL('../src/entry-draft.js',import.meta.url))).update(await readFile(new URL('../src/holidays.js',import.meta.url))).update(await readFile(new URL('../src/submissions.js',import.meta.url))).digest('hex').slice(0,12);
+ const moduleFile=fileURLToPath(new URL('../src/local-api.js',import.meta.url));
+ const version=createHash('sha256').update(await readFile(moduleFile)).update(await readFile(new URL('../src/local-login.js',import.meta.url))).update(await readFile(new URL('../src/portal-views.js',import.meta.url))).update(await readFile(new URL('../src/entry-draft.js',import.meta.url))).update(await readFile(new URL('../src/holidays.js',import.meta.url))).update(await readFile(new URL('../src/submissions.js',import.meta.url))).digest('hex').slice(0,12);
  const modulePath=moduleFile+'?v='+version;
  const pagePath=fileURLToPath(new URL('page.html',import.meta.url));
  await writeFile(resolve(destination,`${name}.ts`),source.replace("'__SDK_MODULE__'",JSON.stringify(modulePath)).replace("'__PAGE_FILE__'",JSON.stringify(pagePath)));

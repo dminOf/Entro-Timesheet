@@ -4,10 +4,28 @@ Node.js SDK with read APIs and past check-in creation for OfficeSystem. Requires
 
 The portal requires a fresh reCAPTCHA token, then authenticates API requests with an HttpOnly `accessToken` cookie. A historical login payload cannot supply a reusable reCAPTCHA token. Browser-assisted login lets the portal perform its normal authentication flow; subsequent reads run directly over HTTP.
 
-## Setup and login
+## Run locally from a fresh checkout
+
+The repository includes the frontend, backend and standalone server. Install Node 22+ and Google Chrome (for login), then run:
 
 ```sh
+git clone https://github.com/dminOf/Entro-Timesheet.git
+cd Entro-Timesheet
 npm ci
+npm test
+npm run login -- --manual
+npm start
+```
+
+Complete your own normal portal login in the Chrome window. Open [the local workspace](http://localhost:3000/entro-login/) or [Timesheet entry](http://localhost:3000/entro-login/entry.html). Keep the server terminal running; Ctrl+C stops it. If port 3000 is occupied, run `npm start -- --port 3001` and open the printed URL. You can also set `ENTRO_PORT`.
+
+This works without Bun, a separate server repository, a frontend build or copied assets. npm installs the spreadsheet libraries from the lockfile. The server accepts connections only from this machine and serves public UI files only. Each person logs in separately; never share saved sessions, credentials, holiday overrides or submission receipts. No session is shipped in the repository.
+
+The UI can open before login, but records and submission need a valid saved session. After login, choose **Verify session** and refresh. For later updates, pull the code, run `npm ci` if dependencies changed, and restart the standalone server. Preserve `.private/` on your own machine. Agent setup and verification instructions are in [AGENTS.md](AGENTS.md).
+
+## Other login options
+
+```sh
 # Supply ENTRO_USERNAME and ENTRO_PASSWORD through your shell or a private .env.
 node --env-file=.env src/cli.js login --headless
 # Visible browser fallback (credentials still supplied via environment):
@@ -40,13 +58,13 @@ Each date receives a result. Recorded dates are removed from the sheet; rejected
 
 Unsubmitted drafts live in page memory, survive month changes, and reset on reload. Submission receipts persist locally per account. Creation has been validated using mocked portal responses; enabling the feature did not create any live entries.
 
-Install or update the shared local web-server adapters with:
+For an existing shared Bun server, install or update its adapters with the command below. Use one server option at a time for a checkout so submissions share one service and duplicate guard.
 
 ```sh
 npm run setup:local-login
 ```
 
-The browser UI requires the separate Bun web server; this repository does not start it. The installer defaults to this machine's shared `apps` directory. On another machine, use `ENTRO_WEB_APPS_DIR=/absolute/path/to/shared-web-server/apps npm run setup:local-login`. Reinstall after frontend changes or moving the SDK checkout because assets are copied and adapters use absolute source paths. Keep the private holiday master and submission receipts when updating.
+This is an optional alternative for people who already use the shared Bun web server. The default standalone `npm start` flow does not require it. The installer defaults to this machine's shared `apps` directory. On another machine, use `ENTRO_WEB_APPS_DIR=/absolute/path/to/shared-web-server/apps npm run setup:local-login`. Reinstall after frontend changes or moving the SDK checkout because assets are copied and adapters use absolute source paths. Keep the private holiday master and submission receipts when updating.
 
 The portal link opens the real login page in your browser. Signing in there does not automatically replace the saved SDK session; importing a session from your own browser profile still needs a browser bridge. No generic login window is launched from the local portal.
 
